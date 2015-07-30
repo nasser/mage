@@ -1,5 +1,5 @@
 (ns mage.core
-  (:refer-clojure :exclude [pop rem and or not])
+  (:refer-clojure :exclude [pop rem and or not type])
   (:require [clojure.string :as string])
   (:import [System.Reflection.Emit LocalBuilder Label ILGenerator OpCodes FieldBuilder]
            [System.Reflection TypeAttributes MethodAttributes FieldAttributes]))
