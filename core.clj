@@ -1,20 +1,22 @@
 (ns mage.core
-  (:refer-clojure :exclude [pop rem and or not type])
+  (:refer-clojure :exclude [pop rem and or not type catch finally])
   (:require [clojure.string :as string])
   (:import [System.Reflection.Emit LocalBuilder Label ILGenerator OpCodes FieldBuilder]
-           [System.Reflection TypeAttributes MethodAttributes FieldAttributes]))
+           [System.Reflection TypeAttributes MethodAttributes MethodImplAttributes FieldAttributes]
+           [System.Runtime.InteropServices CharSet]))
 
 (defmulti emit-data
   "Emit bytecode for symbolic data object m. Internal."
   (fn [context m]
     (cond
-      (::opcode m) ::opcode
-      (::label  m) ::label
-      (::local  m) ::local
-      (::field  m) ::field
-      (::begin  m) ::begin
-      (::end    m) ::end)))
-
+      (::opcode          m) ::opcode
+      (::label           m) ::label
+      (::local           m) ::local
+      (::field           m) ::field
+      (::pinvoke-method  m) ::pinvoke-method
+      (::begin           m) ::begin
+      (::end             m) ::end
+      :else                 [context m])))
 
 (defmethod emit-data ::opcode
   [{:keys [::ilg ::type-builder ::labels ::locals ::fields] :as context} {:keys [::opcode ::argument]}]
@@ -58,6 +60,36 @@
   [{:keys [::type-builder] :as context} {:keys [::field ::type ::attributes] :as fieldmap}]
   (let [^FieldBuilder field (.DefineField type-builder (str field) type attributes)]
     (assoc-in context [::fields fieldmap] field)))
+
+(defmethod emit-data ::pinvoke-method
+  [{:keys [::type-builder] :as context}
+   {:keys [::pinvoke-method
+           ::dll-name
+           ::entry-name
+           ::attributes
+           ::calling-convention
+           ::return-type
+           ::parameter-types
+           ::method-impl-attributes
+           ::native-calling-convention
+           ::native-char-set]}]
+  (let [^MethodBuilder mb
+        (.. type-builder (DefinePInvokeMethod
+                           (str pinvoke-method)
+                           (str dll-name)
+                           (str entry-name)
+                           (enum-or MethodAttributes/PinvokeImpl attributes)
+                           calling-convention
+                           return-type
+                           (into-array Type parameter-types)
+                           native-calling-convention
+                           native-char-set))]
+    ;; TODO enum-or or always from scratch?
+    (.SetImplementationFlags 
+      mb
+      (enum-or (.GetMethodImplementationFlags mb)
+               method-impl-attributes)))
+  context)
 
 (defmethod emit-data ::local
   [{:keys [::ilg] :as context} localmap]
@@ -151,6 +183,8 @@
     ;; ilg
     :exception   (do (.EndExceptionBlock ilg)
                    context)
+    :catch       context
+    :finally     context
     :scope       (do (.EndScope ilg)
                    context))
   )
@@ -201,6 +235,43 @@
                                  ::parameter-types (into-array System.Type parameter-types)}}
     body
     {::end :method}]))
+
+(defn exception
+  ([] (exception nil))
+  ([body] [{::begin :exception} body {::end :exception}]))
+
+(defn catch
+  ([t] (catch t nil))
+  ([t body] [{::begin :catch ::argument t} body {::end :catch}]))
+
+(defn finally
+  ([] (finally nil))
+  ([body] [{::begin :finally} body {::end :finally}]))
+
+(defn pinvoke-method
+  ([name dll-name return-type parameter-types]
+   (pinvoke-method name dll-name name return-type parameter-types))
+  ([name dll-name entry-name return-type parameter-types]
+   (pinvoke-method name dll-name entry-name (enum-or MethodAttributes/Public MethodAttributes/Static) return-type parameter-types))
+  ([name dll-name entry-name attributes return-type parameter-types]
+   (pinvoke-method name dll-name entry-name attributes return-type parameter-types CallingConventions/Standard))
+  ([name dll-name entry-name attributes return-type parameter-types calling-convention]
+   (pinvoke-method name dll-name entry-name attributes return-type parameter-types calling-convention CallingConvention/Winapi))
+  ([name dll-name entry-name attributes return-type parameter-types calling-convention native-calling-convention]
+   (pinvoke-method name dll-name entry-name attributes return-type parameter-types calling-convention native-calling-convention CharSet/Auto))
+  ([name dll-name entry-name attributes return-type parameter-types calling-convention native-calling-convention native-char-set]
+   (pinvoke-method name dll-name entry-name attributes return-type parameter-types calling-convention MethodImplAttributes/PreserveSig native-calling-convention native-char-set))
+  ([name dll-name entry-name attributes return-type parameter-types calling-convention method-impl-attributes native-calling-convention native-char-set]
+   {::pinvoke-method name
+    ::dll-name dll-name 
+    ::entry-name entry-name 
+    ::attributes attributes 
+    ::calling-convention calling-convention 
+    ::return-type return-type 
+    ::parameter-types parameter-types 
+    ::method-impl-attributes method-impl-attributes 
+    ::native-calling-convention native-calling-convention 
+    ::native-char-set native-char-set}))
 
 (defn constructor
   ([parameter-types body] (constructor CallingConventions/Standard parameter-types body))
