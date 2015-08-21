@@ -158,8 +158,6 @@
                           context)
     :scope              (do (.BeginScope ilg)
                           context)))
-(defn find-method
-  ([type name & params] (.GetMethod type name (into-array Type params))))
 
 (defmethod emit-data ::end
   [{:keys [::ilg ::assembly-builder ::type-builder] :as context} {:keys [::end]}]
