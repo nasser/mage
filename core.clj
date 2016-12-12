@@ -124,16 +124,17 @@
                             ::fields {}))
     
     ;; TODO too simplistic? hang on to method-builder? 
-    :method             (assoc context
-                          ::ilg
-                          (.. type-builder (DefineMethod
-                                             (argument ::name)
-                                             (argument ::attributes)
-                                             (argument ::return-type)
-                                             (argument ::parameter-types))
-                              GetILGenerator)
-                          ::labels {}
-                          ::locals {})
+    :method             (let [method-builder
+                              (. type-builder (DefineMethod
+                                                (argument ::name)
+                                                (argument ::attributes)
+                                                (argument ::return-type)
+                                                (argument ::parameter-types)))]
+                          (assoc context
+                            ::ilg (. method-builder GetILGenerator)
+                            ::method-builder method-builder
+                            ::labels {}
+                            ::locals {}))
     
     :constructor        (assoc context
                           ::ilg
@@ -174,7 +175,7 @@
     :type        (do (. type-builder CreateType)
                    (dissoc context ::type-builder ::fields))
     
-    :method      (dissoc context ::ilg ::labels ::locals)
+    :method      (dissoc context ::ilg ::labels ::locals ::method-builder)
     
     :constructor (dissoc context ::ilg ::labels ::locals)
     
