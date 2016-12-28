@@ -98,7 +98,7 @@
     (assoc-in context [::locals localmap] local)))
 
 (defmethod emit-data ::begin
-  [{:keys [::ilg ::assembly-builder ::module-builder ::type-builder] :as context} {:keys [::begin ::argument]}]
+  [{:keys [::ilg ::assembly-builder ::generic-type-parameters ::module-builder ::type-builder] :as context} {:keys [::begin ::argument]}]
   (case begin
     ;; builders
     :assembly           (assoc context
@@ -110,16 +110,35 @@
     
     :module             (assoc context
                           ::module-builder
-                          (. assembly-builder
+                          (. (clojure.core/or assembly-builder
+                                 (.AssemblyBuilder clojure.lang.Compiler/EvalContext))
                              (DefineDynamicModule (argument ::name))))
     
-    :type               (let [tb (. module-builder (DefineType
-                                                     (argument ::name)
-                                                     (argument ::attributes)
-                                                     (argument ::super)))]
+    :type               (let [mb (clojure.core/or module-builder
+                                     (-> clojure.lang.Compiler/EvalContext
+                                         .AssemblyBuilder
+                                         .GetModules ;; TODO better way to get eval module?
+                                         first))
+                              tb (if (argument ::super)
+                                   (. mb (DefineType
+                                                       (argument ::name)
+                                                       (argument ::attributes)
+                                                       (argument ::super)))
+                                   (. mb (DefineType
+                                                       (argument ::name)
+                                                       (argument ::attributes))))
+                              generic-parameter-builders
+                              (when (argument ::generic-parameters)
+                                (.DefineGenericParameters tb (into-array String (map str (argument ::generic-parameters)))))
+                              generic-parameter-map
+                              (apply hash-map
+                                     (interleave
+                                       (argument ::generic-parameters)
+                                       generic-parameter-builders))]
                           (doseq [interface (argument ::interfaces)]
                             (.AddInterfaceImplementation tb interface))
                           (assoc context
+                            ::generic-type-parameters generic-parameter-map
                             ::type-builder tb
                             ::fields {}))
     
@@ -128,8 +147,12 @@
                               (. type-builder (DefineMethod
                                                 (argument ::name)
                                                 (argument ::attributes)
-                                                (argument ::return-type)
-                                                (argument ::parameter-types)))]
+                                                (clojure.core/or (generic-type-parameters
+                                                      (argument ::return-type))
+                                                    (argument ::return-type))
+                                                (into-array Type
+                                                  (map #(clojure.core/or (generic-type-parameters %) %)
+                                                       (argument ::parameter-types)))))]
                           (assoc context
                             ::ilg (. method-builder GetILGenerator)
                             ::method-builder method-builder
@@ -141,7 +164,9 @@
                           (.. type-builder (DefineConstructor
                                              (argument ::attributes)
                                              (argument ::calling-convention)
-                                             (argument ::parameter-types))
+                                             (into-array Type
+                                                (map #(clojure.core/or (generic-type-parameters %) %)
+                                                     (argument ::parameter-types))))
                               GetILGenerator)
                           ::labels {}
                           ::locals {})
@@ -173,7 +198,7 @@
     :module      (dissoc context ::module-builder)
     
     :type        (do (. type-builder CreateType)
-                   (dissoc context ::type-builder ::fields))
+                   (dissoc context ::type-builder ::fields ::generic-type-parameters))
     
     :method      (dissoc context ::ilg ::labels ::locals ::method-builder)
     
@@ -219,8 +244,10 @@
   ([name attributes interfaces body]
    (type name attributes interfaces System.Object body))
   ([name attributes interfaces super body]
+   (type name attributes interfaces super nil body))
+  ([name attributes interfaces super generic-parameters body]
    [{::begin :type
-     ::argument {::name name ::attributes attributes ::interfaces interfaces ::super super}}
+     ::argument {::name name ::attributes attributes ::interfaces interfaces ::super super ::generic-parameters generic-parameters}}
     body
     {::end :type}]))
 
@@ -231,7 +258,7 @@
    [{::begin :method ::argument {::name name
                                  ::attributes attributes
                                  ::return-type return-type
-                                 ::parameter-types (into-array System.Type parameter-types)}}
+                                 ::parameter-types parameter-types}}
     body
     {::end :method}]))
 
