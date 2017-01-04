@@ -9,15 +9,15 @@ Quick Example
 
 (il/emit!
   (il/assembly "Example"
-    (il/module "Example.dll"
-      (il/type "ExampleType"
-        (il/method
+    [(il/module "Example.dll"
+      [(il/type "ExampleType"
+        [(il/method
           "AddIntegers"
           Int32 [Int32 Int32]
           [(il/ldarg-1)
            (il/ldarg-2)
            (il/sub)
-           (il/ret)])))))
+           (il/ret)])])])]))
 
 (.AddIntegers (ExampleType.) 5 6)
 ;; 11
