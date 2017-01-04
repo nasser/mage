@@ -9,57 +9,135 @@
   "Emit bytecode for symbolic data object m. Internal."
   (fn [context m]
     (cond
+      (::constructor     m) ::constructor
+      (::exception       m) ::exception
+      (::catch           m) ::catch
+      (::finally         m) ::finally
       (::opcode          m) ::opcode
       (::label           m) ::label
       (::local           m) ::local
       (::field           m) ::field
+      (::assembly        m) ::assembly
+      (::module          m) ::module
+      (::type            m) ::type
+      (::method          m) ::method
       (::pinvoke-method  m) ::pinvoke-method
-      (::begin           m) ::begin
-      (::end             m) ::end
       :else                 [context m])))
 
-(defmethod emit-data ::opcode
-  [{:keys [::ilg ::type-builder ::labels ::locals ::fields] :as context} {:keys [::opcode ::argument]}]
-  (cond 
-    (nil? argument)     (do (.Emit ilg opcode)
-                          context)
-    
-    (labels argument)  (do (.Emit ilg opcode (labels argument))
-                         context)
-    
-    (fields argument)  (do (.Emit ilg opcode (fields argument))
-                         context)
-    
-    (locals argument)  (do (.Emit ilg opcode (locals argument))
-                         context)
-    
-    (::label argument)  (let [^Label label (.DefineLabel ilg)]
-                          (.Emit ilg opcode label)
-                          (assoc-in context [::labels argument] label))
-        
-    (::field argument)  (let [^FieldBuilder field (.DefineField type-builder (str (::field argument)) (::type argument) (::attributes argument))]
-                           (.Emit ilg opcode field)
-                           (assoc-in context [::fields argument] field))
-    
-    (::local argument)  (let [^LocalBuilder local (.DeclareLocal ilg (::type argument))]
-                          (if-let [name (::name argument)] (.SetLocalSymInfo local name))
-                          (.Emit ilg opcode local)
-                          (assoc-in context [::locals argument] local))
-    
-    :else               (do (.Emit ilg opcode argument)
-                          context)))
+(defn emit!
+  ([stream] (emit! {} stream))
+  ([initial-ctx stream]
+   (reduce (fn [ctx s]
+             (emit-data ctx s))
+           initial-ctx
+           (->> stream flatten (remove nil?)))))
 
-(defmethod emit-data ::label
-  [{:keys [::ilg ::labels] :as context} labelmap]
-  (let [^Label label (clojure.core/or (labels labelmap)
-                         (.DefineLabel ilg))]
-    (.MarkLabel ilg label)
-    (assoc-in context [::labels labelmap] label)))
+;; TODO should we use a generic 'references' map instead of
+;; specific maps e.g. assembly-builders, fields, locals, etc?
+(defmethod emit-data ::assembly
+  [context {:keys [::assembly ::access ::body] :as data}]
+  (let [assembly-builder (.. AppDomain CurrentDomain
+                             (DefineDynamicAssembly
+                               (AssemblyName. assembly)
+                               access))
+        context* (-> context
+                     (assoc ::assembly-builder assembly-builder)
+                     (assoc-in [::assembly-builders data] assembly-builder)
+                     (emit! body))]
+    (.Save assembly-builder
+           (str (.. assembly-builder GetName Name) ".dll"))
+    context*))
+
+(defmethod emit-data ::module
+  [{:keys [::assembly-builder] :as context} {:keys [::module ::body] :as data}]
+  (let [module-builder (. (clojure.core/or
+                            assembly-builder
+                            (.AssemblyBuilder clojure.lang.Compiler/EvalContext))
+                          (DefineDynamicModule (str module)))
+        context* (-> context
+                     (assoc ::module-builder module-builder)
+                     (assoc-in [::module-builders data] module-builder))]
+    (emit! context* body)))
+
+(defmethod emit-data ::type
+  [{:keys [::module-builder] :as context}
+   {:keys [::type ::attributes ::interfaces ::super ::generic-parameters ::body] :as data}]
+  (let [module-builder (clojure.core/or
+                         module-builder
+                         (-> clojure.lang.Compiler/EvalContext
+                             .AssemblyBuilder
+                             (.GetModule "eval")))
+        type-builder (if super
+                       (. module-builder
+                          (DefineType type attributes super))
+                       (. module-builder
+                          (DefineType type attributes)))
+        generic-parameter-builders
+        (when generic-parameters
+          (.DefineGenericParameters
+            type-builder
+            (into-array String (map str generic-parameters))))
+        generic-type-parameters
+        (apply hash-map
+               (interleave
+                 generic-parameters
+                 generic-parameter-builders))
+        context* (-> context
+                     (assoc
+                       ::type-builder type-builder
+                       ::fields {} ;; TODO clearing fields for new types - bad idea?
+                       ::generic-type-parameters generic-type-parameters)
+                     (assoc-in [::type-builders data] type-builder))]
+    (doseq [interface interfaces]
+      (.AddInterfaceImplementation type-builder interface))
+    (let [context** (emit! context* body)]
+      (. type-builder CreateType)
+      context**)))
 
 (defmethod emit-data ::field
-  [{:keys [::type-builder] :as context} {:keys [::field ::type ::attributes] :as fieldmap}]
+  [{:keys [::type-builder ::fields] :as context} {:keys [::field ::type ::attributes] :as data}]
   (let [^FieldBuilder field (.DefineField type-builder (str field) type attributes)]
-    (assoc-in context [::fields fieldmap] field)))
+    (assoc-in context [::fields data] field)))
+
+(defmethod emit-data ::method
+  [{:keys [::type-builder ::fields ::generic-type-parameters] :as context}
+   {:keys [::method ::attributes ::return-type ::parameter-types ::body] :as data}]
+  (let [method-builder (. type-builder (DefineMethod
+                                 method
+                                 attributes
+                                 (clojure.core/or
+                                   (generic-type-parameters return-type)
+                                   return-type)
+                                 (->> parameter-types
+                                      (map #(clojure.core/or (generic-type-parameters %) %))
+                                      (into-array Type))))
+        context* (-> context
+                     (assoc
+                       ::ilg (. method-builder GetILGenerator)
+                       ::method-builder method-builder
+                       ::labels {}
+                       ::locals {})
+                     (assoc-in [::method-builders data] method-builder))]
+    (emit! context* body)))
+
+(defmethod emit-data ::constructor
+  [{:keys [::type-builder ::fields ::generic-type-parameters] :as context}
+   {:keys [::name ::attributes ::calling-convention ::return-type ::parameter-types ::body] :as data}]
+  (let [constructor-builder
+        (. type-builder (DefineConstructor
+                  attributes
+                  calling-convention
+                  (into-array Type
+                              (map #(clojure.core/or (generic-type-parameters %) %)
+                                   parameter-types))))
+        context* (-> context
+                     (assoc
+                       ::ilg (. constructor-builder GetILGenerator)
+                       ::method-builder constructor-builder
+                       ::labels {}
+                       ::locals {})
+                     (assoc-in [::method-builders data] constructor-builder))]
+    (emit! context* body)))
 
 (defmethod emit-data ::pinvoke-method
   [{:keys [::type-builder] :as context}
@@ -72,8 +150,9 @@
            ::parameter-types
            ::method-impl-attributes
            ::native-calling-convention
-           ::native-char-set]}]
-  (let [^MethodBuilder mb
+           ::native-char-set]
+    :as data}]
+  (let [^MethodBuilder method-builder
         (.. type-builder (DefinePInvokeMethod
                            (str pinvoke-method)
                            (str dll-name)
@@ -85,17 +164,150 @@
                            native-calling-convention
                            native-char-set))]
     ;; TODO enum-or or always from scratch?
-    (.SetImplementationFlags 
-      mb
-      (enum-or (.GetMethodImplementationFlags mb)
-               method-impl-attributes)))
-  context)
+    (.SetImplementationFlags method-builder
+                             (enum-or (.GetMethodImplementationFlags method-builder)
+                                      method-impl-attributes))
+    (assoc-in context [::method-builders data] method-builder)))
 
 (defmethod emit-data ::local
-  [{:keys [::ilg] :as context} localmap]
-  (let [^LocalBuilder local (.DeclareLocal ilg (::type localmap))]
-    (if-let [name (::name localmap)] (.SetLocalSymInfo local name))
-    (assoc-in context [::locals localmap] local)))
+  [{:keys [::ilg ::type-builders] :as context} {:keys [::type ::local] :as data}]
+  (let [t (clojure.core/or (type-builders type) type)
+        ^LocalBuilder local-builder (.DeclareLocal ilg t)]
+    (if-let [n local] (.SetLocalSymInfo local-builder (str n)))
+    (assoc-in context [::locals data] local-builder)))
+
+(defmethod emit-data ::label
+  [{:keys [::ilg ::labels] :as context} data]
+  (let [^Label label (clojure.core/or (labels data)
+                         (.DefineLabel ilg))]
+    (.MarkLabel ilg label)
+    (assoc-in context [::labels data] label)))
+
+(defmethod emit-data ::catch
+  [{:keys [::ilg] :as context}
+   {:keys [::catch ::body] :as data}]
+  (.BeginCatchBlock ilg catch)
+  (emit! context body))
+
+(defmethod emit-data ::exception
+  [{:keys [::ilg] :as context}
+   {:keys [::body] :as data}]
+  (.BeginExceptionBlock ilg)
+  (let [context* (emit! context body)]
+    (.EndExceptionBlock ilg)
+    context*))
+
+(defmethod emit-data ::finally
+  [{:keys [::ilg] :as context}
+   {:keys [::body] :as data}]
+  (.BeginFinallyBlock ilg)
+  (emit! context body))
+
+(defmethod emit-data ::opcode
+  [{:keys [::assembly-builders ::module-builders ::type-builders ::method-builders
+           ::labels ::locals ::fields ::ilg ::type-builder]
+    :or {labels {}
+         fields {}
+         locals {}
+         assembly-builders {}
+         module-builders {}
+         type-builders {}
+         method-builders {}}
+    :as context}
+   {:keys [::opcode ::argument] :as data}]
+  (cond
+    (nil? argument)
+    (do
+      (.Emit ilg opcode)
+      context)
+    
+    (labels argument)
+    (do (.Emit ilg opcode (labels argument))
+      context)
+    
+    (fields argument)
+    (do (.Emit ilg opcode (fields argument))
+      context)
+    
+    (locals argument)
+    (do (.Emit ilg opcode (locals argument))
+      context)
+    
+    (assembly-builders argument) 
+    (do (.Emit ilg opcode (assembly-builders argument))
+      context)
+    
+    (module-builders argument)
+    (do (.Emit ilg opcode (module-builders argument))
+      context)
+    
+    (type-builders argument)
+    (do (.Emit ilg opcode (type-builders argument))
+      context)
+    
+    (method-builders argument)
+    (do (.Emit ilg opcode (method-builders argument))
+      context)
+    
+    ;; no emit-data! here because we dont mark the label?
+    (::label argument)
+    (let [^Label label (.DefineLabel ilg)]
+      (.Emit ilg opcode label)
+      (assoc-in context [::labels argument] label))
+    
+    (::field argument)
+    (let [{:keys [::ilg ::fields] :as context*}
+          (emit-data context argument)]
+      (.Emit ilg opcode ^FieldBuilder (fields argument))
+      context*)
+    
+    (::local argument)
+    (let [{:keys [::ilg ::locals] :as context*}
+          (emit-data context argument)]
+      (.Emit ilg opcode ^LocalBuilder (locals argument))
+      context*)
+    
+    (::assembly argument)
+    (let [{:keys [::ilg ::assembly-builders] :as context*}
+          (emit-data context argument)]
+      (.Emit ilg opcode (assembly-builders argument))
+      context*)
+    
+    (::module argument)
+    (let [{:keys [::ilg ::module-builders] :as context*}
+          (emit-data context argument)]
+      (.Emit ilg opcode (module-builders argument))
+      context*)
+    
+    (::type argument)
+    (let [{:keys [::ilg ::type-builders] :as context*}
+          (emit-data context argument)]
+      (.Emit ilg opcode ^TypeBuilder (type-builders argument))
+      context*)
+    
+    (::method argument)
+    (let [{:keys [::ilg ::method-builders] :as context*}
+          (emit-data context argument)]
+      (.Emit ilg opcode ^MethodBuilder (method-builders argument))
+      context*)
+    
+    :else
+    (do
+      (.Emit ilg opcode argument)
+      context)))
+
+;; OR
+;; if argument in references?
+;; (.Emit ilg opcode (references argument))
+;; if argument is hashmap
+;; (emit! argument)
+;; (.Emit ilg opcode ???)
+
+
+;;;; missing:
+;; BeginExceptFilterBlock
+;; BeginFaultBlock
+;; BeginScope
 
 (defmethod emit-data ::begin
   [{:keys [::ilg ::assembly-builder ::generic-type-parameters ::module-builder ::type-builder] :as context} {:keys [::begin ::argument]}]
@@ -213,30 +425,27 @@
                    context))
   )
 
-(defn emit!
-  ([stream] (emit! {} stream))
-  ([initial-ctx stream]
-   (reduce (fn [ctx s] (emit-data ctx s))
-           initial-ctx
-           (->> stream flatten (remove nil?)))))
-
 ;;; constructor functions
 (defn assembly
-  ([name body] (assembly name AssemblyBuilderAccess/RunAndSave body))
+  ([name]
+   (assembly name nil))
+  ([name body]
+   (assembly name AssemblyBuilderAccess/RunAndSave body))
   ([name access body]
-   [{::begin :assembly
-     ::argument {::name (AssemblyName. name) ::access access}}
-    body
-    ;; TODO end assembly options?
-    {::end :assembly}]))
+   {::assembly name
+    ::access access
+    ::body body}))
 
 (defn module 
+  ([name]
+   (module name nil))
   ([name body]
-   [{::begin :module ::argument {::name name}}
-    body
-    {::end :module}]))
+   {::module name
+    ::body body}))
 
 (defn type
+  ([name]
+   (type name nil))
   ([name body]
    (type name [] body))
   ([name interfaces body]
@@ -246,33 +455,36 @@
   ([name attributes interfaces super body]
    (type name attributes interfaces super nil body))
   ([name attributes interfaces super generic-parameters body]
-   [{::begin :type
-     ::argument {::name name ::attributes attributes ::interfaces interfaces ::super super ::generic-parameters generic-parameters}}
-    body
-    {::end :type}]))
+   {::type name 
+    ::attributes attributes 
+    ::interfaces interfaces 
+    ::super super 
+    ::generic-parameters generic-parameters
+    ::body body}))
 
 (defn method
   ([name return-type parameter-types body]
    (method name MethodAttributes/Public return-type parameter-types body))
   ([name attributes return-type parameter-types body]
-   [{::begin :method ::argument {::name name
-                                 ::attributes attributes
-                                 ::return-type return-type
-                                 ::parameter-types parameter-types}}
-    body
-    {::end :method}]))
+   {::method name
+    ::attributes attributes
+    ::return-type return-type
+    ::parameter-types parameter-types
+    ::body body}))
 
+;; try block
 (defn exception
   ([] (exception nil))
-  ([body] [{::begin :exception} body {::end :exception}]))
+  ([body] {::exception body}))
 
 (defn catch
   ([t] (catch t nil))
-  ([t body] [{::begin :catch ::argument t} body {::end :catch}]))
+  ([t body] {::catch t ::body body}))
 
 (defn finally
   ([] (finally nil))
-  ([body] [{::begin :finally} body {::end :finally}]))
+  ([body] {::finally body}))
+
 
 (defn pinvoke-method
   ([name dll-name return-type parameter-types]
@@ -304,11 +516,11 @@
   ([calling-convention parameter-types body]
    (constructor MethodAttributes/Public calling-convention parameter-types body))
   ([attributes calling-convention parameter-types body]
-   [{::begin :constructor ::argument {::attributes attributes
-                                      ::calling-convention calling-convention
-                                      ::parameter-types (into-array System.Type parameter-types)}}
-    body
-    {::end :constructor}]))
+   {::constructor parameter-types
+    ::attributes attributes
+    ::calling-convention calling-convention
+    ::parameter-types parameter-types ;; TODO duplicate?
+    ::body body}))
 
 (defn local
   ([] (local System.Object))
@@ -317,9 +529,9 @@
 
 (defn field
   ([] (field System.Object))
-  ([t] (field t (enum-or FieldAttributes/InitOnly FieldAttributes/Private)))
-  ([t attr] (field t attr (gensym "field")))
-  ([t attr i] {::field i ::type t ::attributes attr}))
+  ([t] (field t (gensym "field")))
+  ([t i] (field t i (enum-or FieldAttributes/InitOnly FieldAttributes/Private)))
+  ([t i attr] {::field i ::type t ::attributes attr}))
 
 (defn label
   ([] (label (gensym "label")))
