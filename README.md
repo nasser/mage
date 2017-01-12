@@ -16,7 +16,7 @@ Quick Example
           Int32 [Int32 Int32]
           [(il/ldarg-1)
            (il/ldarg-2)
-           (il/sub)
+           (il/add)
            (il/ret)])])])]))
 
 (.AddIntegers (ExampleType.) 5 6)
