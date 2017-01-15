@@ -5,7 +5,7 @@
            [System.Reflection TypeAttributes MethodAttributes MethodImplAttributes FieldAttributes]
            [System.Runtime.InteropServices CharSet]))
 
-(defmulti emit-data
+(defmulti emit*
   "Emit bytecode for symbolic data object m. Internal."
   (fn [context m]
     (cond
@@ -27,14 +27,19 @@
 (defn emit!
   ([stream] (emit! {} stream))
   ([initial-ctx stream]
-   (reduce (fn [ctx s]
-             (emit-data ctx s))
-           initial-ctx
-           (->> stream flatten (remove nil?)))))
+   (cond
+     (clojure.core/or (vector? stream)
+                      (seq? stream))
+     (reduce (fn [ctx s]
+               (emit* ctx s))
+             initial-ctx
+             (->> stream flatten (remove nil?)))
+     (some? stream)
+     (emit* initial-ctx stream))))
 
 ;; TODO should we use a generic 'references' map instead of
 ;; specific maps e.g. assembly-builders, fields, locals, etc?
-(defmethod emit-data ::assembly
+(defmethod emit* ::assembly
   [context {:keys [::assembly ::access ::body] :as data}]
   (let [assembly-builder (.. AppDomain CurrentDomain
                              (DefineDynamicAssembly
@@ -48,7 +53,7 @@
            (str (.. assembly-builder GetName Name) ".dll"))
     context*))
 
-(defmethod emit-data ::module
+(defmethod emit* ::module
   [{:keys [::assembly-builder] :as context} {:keys [::module ::body] :as data}]
   (let [module-builder (. (clojure.core/or
                             assembly-builder
@@ -59,14 +64,28 @@
                      (assoc-in [::module-builders data] module-builder))]
     (emit! context* body)))
 
-(defmethod emit-data ::type
-  [{:keys [::module-builder] :as context}
+
+(defn compiler-context []
+  (let [field (.GetField clojure.lang.Compiler
+                         "CompilerContextVar"
+                         (enum-or BindingFlags/NonPublic
+                                  BindingFlags/Static))]
+    (-> field (.GetValue nil) deref)))
+
+(defn eval-context []
+  clojure.lang.Compiler/EvalContext)
+
+(defmethod emit* ::type
+  [{:keys [::module-builder ::type-builders ::generic-type-parameters] :as context
+    :or {::type-builders {}
+         ::generic-type-parameters {}}}
    {:keys [::type ::attributes ::interfaces ::super ::generic-parameters ::body] :as data}]
   (let [module-builder (clojure.core/or
                          module-builder
-                         (-> clojure.lang.Compiler/EvalContext
-                             .AssemblyBuilder
-                             (.GetModule "eval")))
+                         (-> (clojure.core/or
+                               (compiler-context)
+                               (eval-context))
+                             .ModuleBuilder))
         type-builder (if super
                        (. module-builder
                           (DefineType type attributes super))
@@ -87,25 +106,36 @@
                        ::type-builder type-builder
                        ::fields {} ;; TODO clearing fields for new types - bad idea?
                        ::generic-type-parameters generic-type-parameters)
-                     (assoc-in [::type-builders data] type-builder))]
+                     (assoc-in [::type-builders data] type-builder)
+                     (assoc-in [::type-builders ::this-type] type-builder))]
     (doseq [interface interfaces]
-      (.AddInterfaceImplementation type-builder interface))
-    (let [context** (emit! context* body)]
-      (. type-builder CreateType)
-      context**)))
+      (when interface ;; why would interface ever be nil?
+        (let [interface (clojure.core/or
+                          (type-builders interface)
+                          (generic-type-parameters interface)
+                          interface)]
+          (.AddInterfaceImplementation type-builder interface))))
+    (emit! context* body)
+    (. type-builder CreateType)
+    context*))
 
-(defmethod emit-data ::field
-  [{:keys [::type-builder ::fields] :as context} {:keys [::field ::type ::attributes] :as data}]
-  (let [^FieldBuilder field (.DefineField type-builder (str field) type attributes)]
+(defmethod emit* ::field
+  [{:keys [::type-builder ::type-builders ::generic-type-parameters ::fields] :as context}
+   {:keys [::field ::type ::attributes] :as data}]
+  (let [t (clojure.core/or (type-builders type)
+                           (generic-type-parameters type)
+                           type)
+        ^FieldBuilder field (.DefineField type-builder (str field) t attributes)]
     (assoc-in context [::fields data] field)))
 
-(defmethod emit-data ::method
-  [{:keys [::type-builder ::fields ::generic-type-parameters] :as context}
+(defmethod emit* ::method
+  [{:keys [::type-builder ::type-builders ::fields ::generic-type-parameters] :as context}
    {:keys [::method ::attributes ::return-type ::parameter-types ::body] :as data}]
   (let [method-builder (. type-builder (DefineMethod
                                  method
                                  attributes
                                  (clojure.core/or
+                                   (type-builders return-type)
                                    (generic-type-parameters return-type)
                                    return-type)
                                  (->> parameter-types
@@ -117,10 +147,11 @@
                        ::method-builder method-builder
                        ::labels {}
                        ::locals {})
-                     (assoc-in [::method-builders data] method-builder))]
+                     (assoc-in [::method-builders data] method-builder)
+                     (assoc-in [::method-builders ::this-method] method-builder))]
     (emit! context* body)))
 
-(defmethod emit-data ::constructor
+(defmethod emit* ::constructor
   [{:keys [::type-builder ::fields ::generic-type-parameters] :as context}
    {:keys [::name ::attributes ::calling-convention ::return-type ::parameter-types ::body] :as data}]
   (let [constructor-builder
@@ -136,10 +167,11 @@
                        ::method-builder constructor-builder
                        ::labels {}
                        ::locals {})
-                     (assoc-in [::method-builders data] constructor-builder))]
+                     (assoc-in [::method-builders data] constructor-builder)
+                     (assoc-in [::method-builders ::this-method] constructor-builder))]
     (emit! context* body)))
 
-(defmethod emit-data ::pinvoke-method
+(defmethod emit* ::pinvoke-method
   [{:keys [::type-builder] :as context}
    {:keys [::pinvoke-method
            ::dll-name
@@ -169,27 +201,27 @@
                                       method-impl-attributes))
     (assoc-in context [::method-builders data] method-builder)))
 
-(defmethod emit-data ::local
+(defmethod emit* ::local
   [{:keys [::ilg ::type-builders] :as context} {:keys [::type ::local] :as data}]
   (let [t (clojure.core/or (type-builders type) type)
         ^LocalBuilder local-builder (.DeclareLocal ilg t)]
     (if-let [n local] (.SetLocalSymInfo local-builder (str n)))
     (assoc-in context [::locals data] local-builder)))
 
-(defmethod emit-data ::label
+(defmethod emit* ::label
   [{:keys [::ilg ::labels] :as context} data]
   (let [^Label label (clojure.core/or (labels data)
                          (.DefineLabel ilg))]
     (.MarkLabel ilg label)
     (assoc-in context [::labels data] label)))
 
-(defmethod emit-data ::catch
+(defmethod emit* ::catch
   [{:keys [::ilg] :as context}
    {:keys [::catch ::body] :as data}]
   (.BeginCatchBlock ilg catch)
   (emit! context body))
 
-(defmethod emit-data ::exception
+(defmethod emit* ::exception
   [{:keys [::ilg] :as context}
    {:keys [::body] :as data}]
   (.BeginExceptionBlock ilg)
@@ -197,59 +229,66 @@
     (.EndExceptionBlock ilg)
     context*))
 
-(defmethod emit-data ::finally
+(defmethod emit* ::finally
   [{:keys [::ilg] :as context}
    {:keys [::body] :as data}]
   (.BeginFinallyBlock ilg)
   (emit! context body))
 
-(defmethod emit-data ::opcode
+(defmethod emit* ::opcode
   [{:keys [::assembly-builders ::module-builders ::type-builders ::method-builders
            ::labels ::locals ::fields ::ilg ::type-builder]
-    :or {labels {}
-         fields {}
-         locals {}
-         assembly-builders {}
-         module-builders {}
-         type-builders {}
-         method-builders {}}
+    :or {::labels {}
+         ::fields {}
+         ::locals {}
+         ::assembly-builders {}
+         ::module-builders {}
+         ::type-builders {}
+         ::method-builders {}}
     :as context}
    {:keys [::opcode ::argument] :as data}]
   (cond
     (nil? argument)
-    (do
+    (do 
       (.Emit ilg opcode)
       context)
     
     (labels argument)
-    (do (.Emit ilg opcode (labels argument))
+    (do 
+      (.Emit ilg opcode (labels argument))
       context)
     
     (fields argument)
-    (do (.Emit ilg opcode (fields argument))
+    (do 
+      (.Emit ilg opcode (fields argument))
       context)
     
     (locals argument)
-    (do (.Emit ilg opcode (locals argument))
+    (do 
+      (.Emit ilg opcode (locals argument))
       context)
     
     (assembly-builders argument) 
-    (do (.Emit ilg opcode (assembly-builders argument))
+    (do 
+      (.Emit ilg opcode (assembly-builders argument))
       context)
     
     (module-builders argument)
-    (do (.Emit ilg opcode (module-builders argument))
+    (do 
+      (.Emit ilg opcode (module-builders argument))
       context)
     
     (type-builders argument)
-    (do (.Emit ilg opcode (type-builders argument))
+    (do 
+      (.Emit ilg opcode (type-builders argument))
       context)
     
     (method-builders argument)
-    (do (.Emit ilg opcode (method-builders argument))
+    (do 
+      (.Emit ilg opcode (method-builders argument))
       context)
     
-    ;; no emit-data! here because we dont mark the label?
+    ;; no emit*! here because we dont mark the label?
     (::label argument)
     (let [^Label label (.DefineLabel ilg)]
       (.Emit ilg opcode label)
@@ -257,37 +296,37 @@
     
     (::field argument)
     (let [{:keys [::ilg ::fields] :as context*}
-          (emit-data context argument)]
+          (emit* context argument)]
       (.Emit ilg opcode ^FieldBuilder (fields argument))
       context*)
     
     (::local argument)
     (let [{:keys [::ilg ::locals] :as context*}
-          (emit-data context argument)]
+          (emit* context argument)]
       (.Emit ilg opcode ^LocalBuilder (locals argument))
       context*)
     
     (::assembly argument)
     (let [{:keys [::ilg ::assembly-builders] :as context*}
-          (emit-data context argument)]
+          (emit* context argument)]
       (.Emit ilg opcode (assembly-builders argument))
       context*)
     
     (::module argument)
     (let [{:keys [::ilg ::module-builders] :as context*}
-          (emit-data context argument)]
+          (emit* context argument)]
       (.Emit ilg opcode (module-builders argument))
       context*)
     
     (::type argument)
     (let [{:keys [::ilg ::type-builders] :as context*}
-          (emit-data context argument)]
+          (emit* context argument)]
       (.Emit ilg opcode ^TypeBuilder (type-builders argument))
       context*)
     
     (::method argument)
     (let [{:keys [::ilg ::method-builders] :as context*}
-          (emit-data context argument)]
+          (emit* context argument)]
       (.Emit ilg opcode ^MethodBuilder (method-builders argument))
       context*)
     
@@ -309,7 +348,7 @@
 ;; BeginFaultBlock
 ;; BeginScope
 
-(defmethod emit-data ::begin
+(defmethod emit* ::begin
   [{:keys [::ilg ::assembly-builder ::generic-type-parameters ::module-builder ::type-builder] :as context} {:keys [::begin ::argument]}]
   (case begin
     ;; builders
@@ -397,7 +436,7 @@
     :scope              (do (.BeginScope ilg)
                           context)))
 
-(defmethod emit-data ::end
+(defmethod emit* ::end
   [{:keys [::ilg ::assembly-builder ::type-builder] :as context} {:keys [::end]}]
   (case end
     ;; builders
@@ -442,6 +481,15 @@
   ([name body]
    {::module name
     ::body body}))
+
+(defn assembly+module
+  ([name body] (assembly+module name AssemblyBuilderAccess/RunAndSave body))
+  ([name access body]
+   (assembly
+     name access
+     [(module
+        (str name ".dll")
+        body)])))
 
 (defn type
   ([name]
