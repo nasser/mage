@@ -330,6 +330,16 @@
       (.Emit ilg opcode ^MethodBuilder (method-builders argument))
       context*)
     
+    (= opcode OpCodes/Switch)
+    (let [switch-labels argument
+          context* (reduce (fn [{:keys [::ilg] :as ctx} lbl]
+                             (let [^Label label (.DefineLabel ilg)]
+                               (assoc-in ctx [::labels lbl] label)))
+                           context switch-labels)
+          labels* (::labels context*)]
+      (.Emit ilg opcode (into-array Label (map labels* argument)))
+      context*)
+    
     :else
     (do
       (.Emit ilg opcode argument)
