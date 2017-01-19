@@ -288,7 +288,7 @@
       (.Emit ilg opcode (method-builders argument))
       context)
     
-    ;; no emit*! here because we dont mark the label?
+    ;; no emit* here because we dont mark the label?
     (::label argument)
     (let [^Label label (.DefineLabel ilg)]
       (.Emit ilg opcode label)
