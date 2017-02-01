@@ -1,9 +1,9 @@
 (ns mage.core
   (:refer-clojure :exclude [pop rem and or not type catch finally])
   (:require [clojure.string :as string])
-  (:import [System.Reflection.Emit LocalBuilder Label ILGenerator OpCodes FieldBuilder]
-           [System.Reflection TypeAttributes MethodAttributes MethodImplAttributes FieldAttributes]
-           [System.Runtime.InteropServices CharSet]))
+  (:import [System.Reflection.Emit LocalBuilder Label ILGenerator OpCodes AssemblyBuilderAccess TypeBuilder MethodBuilder FieldBuilder DynamicMethod]
+           [System.Reflection CallingConventions BindingFlags AssemblyName TypeAttributes MethodAttributes MethodImplAttributes FieldAttributes]
+           [System.Runtime.InteropServices CallingConvention CharSet]))
 
 (defmulti emit*
   "Emit bytecode for symbolic data object m. Internal."
@@ -127,6 +127,7 @@
                            type)
         ^FieldBuilder field (.DefineField type-builder (str field) t attributes)]
     (assoc-in context [::fields data] field)))
+
 
 (defmethod emit* ::method
   [{:keys [::type-builder ::type-builders ::fields ::generic-type-parameters] :as context}
