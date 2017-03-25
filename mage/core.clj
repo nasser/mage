@@ -2,7 +2,7 @@
   (:refer-clojure :exclude [pop rem and or not type catch finally])
   (:require [clojure.string :as string])
   (:import [System.Reflection.Emit LocalBuilder Label ILGenerator OpCodes AssemblyBuilderAccess TypeBuilder MethodBuilder FieldBuilder DynamicMethod]
-           [System.Reflection CallingConventions BindingFlags AssemblyName TypeAttributes MethodAttributes MethodImplAttributes FieldAttributes]
+           [System.Reflection ParameterAttributes CallingConventions BindingFlags AssemblyName TypeAttributes MethodAttributes MethodImplAttributes FieldAttributes]
            [System.Runtime.InteropServices CallingConvention CharSet]))
 
 (defmulti emit*
@@ -36,6 +36,7 @@
              (->> stream flatten (remove nil?)))
      (some? stream)
      (emit* initial-ctx stream))))
+
 
 ;; TODO should we use a generic 'references' map instead of
 ;; specific maps e.g. assembly-builders, fields, locals, etc?
@@ -131,7 +132,7 @@
 
 (defmethod emit* ::method
   [{:keys [::type-builder ::type-builders ::fields ::generic-type-parameters] :as context}
-   {:keys [::method ::attributes ::return-type ::parameter-types ::body] :as data}]
+   {:keys [::method ::attributes ::return-type ::parameters ::body] :as data}]
   (let [method-builder (. type-builder (DefineMethod
                                  method
                                  attributes
@@ -139,7 +140,8 @@
                                    (type-builders return-type)
                                    (generic-type-parameters return-type)
                                    return-type)
-                                 (->> parameter-types
+                                 (->> parameters
+                                      (map ::type)
                                       (map #(clojure.core/or (generic-type-parameters %) %))
                                       (into-array Type))))
         context* (-> context
@@ -150,6 +152,10 @@
                        ::locals {})
                      (assoc-in [::method-builders data] method-builder)
                      (assoc-in [::method-builders ::this-method] method-builder))]
+    (doseq [i (range (count parameters))]
+      (let [{:keys [::attributes ::name]} (nth parameters i)
+            j (inc i)]
+        (.DefineParameter method-builder j attributes name)))
     (emit! context* body)))
 
 (defmethod emit* ::constructor
@@ -522,14 +528,24 @@
     ::body body}))
 
 (defn method
-  ([name return-type parameter-types body]
-   (method name MethodAttributes/Public return-type parameter-types body))
-  ([name attributes return-type parameter-types body]
+  ([name return-type parameters body]
+   (method name MethodAttributes/Public return-type parameters body))
+  ([name attributes return-type parameters body]
    {::method name
     ::attributes attributes
     ::return-type return-type
-    ::parameter-types parameter-types
+    ::parameters parameters
     ::body body}))
+
+(defn parameter
+  ([type]
+   (parameter type nil))
+  ([type name]
+   (parameter type name ParameterAttributes/None))
+  ([type name attributes]
+   {::type type
+    ::name name
+    ::attributes attributes}))
 
 ;; try block
 (defn exception
