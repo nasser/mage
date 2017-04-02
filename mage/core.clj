@@ -527,16 +527,6 @@
     ::generic-parameters generic-parameters
     ::body body}))
 
-(defn method
-  ([name return-type parameters body]
-   (method name MethodAttributes/Public return-type parameters body))
-  ([name attributes return-type parameters body]
-   {::method name
-    ::attributes attributes
-    ::return-type return-type
-    ::parameters parameters
-    ::body body}))
-
 (defn parameter
   ([type]
    (parameter type nil))
@@ -546,6 +536,16 @@
    {::type type
     ::name name
     ::attributes attributes}))
+
+(defn method
+  ([name return-type parameters body]
+   (method name MethodAttributes/Public return-type parameters body))
+  ([name attributes return-type parameters body]
+   {::method name
+    ::attributes attributes
+    ::return-type return-type
+    ::parameters (mapv #(if (isa? % Type) (parameter %) %) parameters)
+    ::body body}))
 
 ;; try block
 (defn exception
