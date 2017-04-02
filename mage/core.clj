@@ -544,7 +544,7 @@
    {::method name
     ::attributes attributes
     ::return-type return-type
-    ::parameters (mapv #(if (isa? % Type) (parameter %) %) parameters)
+    ::parameters (mapv #(if (instance? Type %) (parameter %) %) parameters)
     ::body body}))
 
 ;; try block
