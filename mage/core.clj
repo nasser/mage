@@ -230,9 +230,9 @@
 
 (defmethod emit* ::exception
   [{:keys [::ilg] :as context}
-   {:keys [::body] :as data}]
+   {:keys [::exception] :as data}]
   (.BeginExceptionBlock ilg)
-  (let [context* (emit! context body)]
+  (let [context* (emit! context exception)]
     (.EndExceptionBlock ilg)
     context*))
 
