@@ -238,9 +238,9 @@
 
 (defmethod emit* ::finally
   [{:keys [::ilg] :as context}
-   {:keys [::body] :as data}]
+   {:keys [::finally] :as data}]
   (.BeginFinallyBlock ilg)
-  (emit! context body))
+  (emit! context finally))
 
 (defmethod emit* ::opcode
   [{:keys [::assembly-builders ::module-builders ::type-builders ::method-builders
