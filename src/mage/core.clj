@@ -80,7 +80,7 @@
   [{:keys [::module-builder ::type-builders ::generic-type-parameters] :as context
     :or {::type-builders {}
          ::generic-type-parameters {}}}
-   {:keys [::type ::attributes ::interfaces ::super ::generic-parameters ::body] :as data}]
+   {:keys [::type ::attributes ::interfaces ::super ::generic-parameters ::body ::key] :as data}]
   (let [module-builder (clojure.core/or
                          module-builder
                          (-> (clojure.core/or
@@ -107,7 +107,7 @@
                        ::type-builder type-builder
                        ::fields {} ;; TODO clearing fields for new types - bad idea?
                        ::generic-type-parameters generic-type-parameters)
-                     (assoc-in [::type-builders data] type-builder)
+                     (assoc-in [::type-builders (clojure.core/or key data)] type-builder)
                      (assoc-in [::type-builders ::this-type] type-builder))]
     (doseq [interface interfaces]
       (when interface ;; why would interface ever be nil?
@@ -122,17 +122,17 @@
 
 (defmethod emit* ::field
   [{:keys [::type-builder ::type-builders ::generic-type-parameters ::fields] :as context}
-   {:keys [::field ::type ::attributes] :as data}]
+   {:keys [::field ::type ::attributes ::key] :as data}]
   (let [t (clojure.core/or (type-builders type)
                            (generic-type-parameters type)
                            type)
         ^FieldBuilder field (.DefineField type-builder (str field) t attributes)]
-    (assoc-in context [::fields data] field)))
+    (assoc-in context [::fields (clojure.core/or key data)] field)))
 
 
 (defmethod emit* ::method
   [{:keys [::type-builder ::type-builders ::fields ::generic-type-parameters] :as context}
-   {:keys [::method ::attributes ::return-type ::parameters ::body] :as data}]
+   {:keys [::method ::attributes ::return-type ::parameters ::body ::key] :as data}]
   (let [method-builder (. type-builder (DefineMethod
                                  method
                                  attributes
@@ -150,7 +150,7 @@
                        ::method-builder method-builder
                        ::labels {}
                        ::locals {})
-                     (assoc-in [::method-builders data] method-builder)
+                     (assoc-in [::method-builders (clojure.core/or key data)] method-builder)
                      (assoc-in [::method-builders ::this-method] method-builder))]
     (doseq [i (range (count parameters))]
       (let [{:keys [::attributes ::name]} (nth parameters i)
@@ -160,7 +160,7 @@
 
 (defmethod emit* ::constructor
   [{:keys [::type-builder ::fields ::generic-type-parameters] :as context}
-   {:keys [::name ::attributes ::calling-convention ::return-type ::parameter-types ::body] :as data}]
+   {:keys [::name ::attributes ::calling-convention ::return-type ::parameter-types ::body ::key] :as data}]
   (let [constructor-builder
         (. type-builder (DefineConstructor
                   attributes
@@ -174,7 +174,7 @@
                        ::method-builder constructor-builder
                        ::labels {}
                        ::locals {})
-                     (assoc-in [::method-builders data] constructor-builder)
+                     (assoc-in [::method-builders (clojure.core/or key data)] constructor-builder)
                      (assoc-in [::method-builders ::this-method] constructor-builder))]
     (emit! context* body)))
 
@@ -189,7 +189,8 @@
            ::parameter-types
            ::method-impl-attributes
            ::native-calling-convention
-           ::native-char-set]
+           ::native-char-set
+           ::key]
     :as data}]
   (let [^MethodBuilder method-builder
         (.. type-builder (DefinePInvokeMethod
@@ -206,21 +207,21 @@
     (.SetImplementationFlags method-builder
                              (enum-or (.GetMethodImplementationFlags method-builder)
                                       method-impl-attributes))
-    (assoc-in context [::method-builders data] method-builder)))
+    (assoc-in context [::method-builders (clojure.core/or key data)] method-builder)))
 
 (defmethod emit* ::local
-  [{:keys [::ilg ::type-builders] :as context} {:keys [::type ::local] :as data}]
+  [{:keys [::ilg ::type-builders] :as context} {:keys [::type ::local ::key] :as data}]
   (let [t (clojure.core/or (type-builders type) type)
         ^LocalBuilder local-builder (.DeclareLocal ilg t)]
     (if-let [n local] (.SetLocalSymInfo local-builder (str n)))
-    (assoc-in context [::locals data] local-builder)))
+    (assoc-in context [::locals (clojure.core/or key data)] local-builder)))
 
 (defmethod emit* ::label
-  [{:keys [::ilg ::labels] :as context} data]
+  [{:keys [::ilg ::labels] :as context} {:keys [::key] :as data}]
   (let [^Label label (clojure.core/or (labels data)
                          (.DefineLabel ilg))]
     (.MarkLabel ilg label)
-    (assoc-in context [::labels data] label)))
+    (assoc-in context [::labels (clojure.core/or key data)] label)))
 
 (defmethod emit* ::catch
   [{:keys [::ilg] :as context}
