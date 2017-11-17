@@ -76,26 +76,43 @@
 (defn eval-context []
   clojure.lang.Compiler/EvalContext)
 
+(defn complete-type [builder builders]
+  (. builder CreateType)
+  (doseq [b builders]
+    (when (clojure.core/and
+            (.IsNested b)
+            (= builder (.DeclaringType b)))
+      (complete-type b builders))))
+
 (defmethod emit* ::type
-  [{:keys [::module-builder ::type-builders ::generic-type-parameters] :as context
+  [{:keys [::type-builder ::module-builder ::type-builders ::generic-type-parameters] :as context
     :or {::type-builders {}
          ::generic-type-parameters {}}}
-   {:keys [::type ::attributes ::interfaces ::super ::generic-parameters ::body ::key] :as data}]
+   {:keys [::type ::attributes ::interfaces ::super ::generic-parameters ::body ::key] :as data
+    :or {::attributes TypeAttributes/Public}}]
   (let [module-builder (clojure.core/or
                          module-builder
                          (-> (clojure.core/or
                                (compiler-context)
                                (eval-context))
                              .ModuleBuilder))
-        type-builder (if super
-                       (. module-builder
-                          (DefineType type attributes super))
-                       (. module-builder
-                          (DefineType type attributes)))
+        nested? (boolean type-builder)
+        type-builder* (if nested?
+                        ;; TODO fix attributes hack
+                        (if super
+                          (. type-builder
+                             (DefineNestedType type TypeAttributes/NestedPublic super))
+                          (. type-builder
+                             (DefineNestedType type TypeAttributes/NestedPublic)))
+                        (if super
+                          (. module-builder
+                             (DefineType type attributes super))
+                          (. module-builder
+                             (DefineType type attributes))))
         generic-parameter-builders
         (when generic-parameters
           (.DefineGenericParameters
-            type-builder
+            type-builder*
             (into-array String (map str generic-parameters))))
         generic-type-parameters
         (apply hash-map
@@ -104,21 +121,23 @@
                  generic-parameter-builders))
         context* (-> context
                      (assoc
-                       ::type-builder type-builder
+                       ::type-builder type-builder*
                        ::fields {} ;; TODO clearing fields for new types - bad idea?
                        ::generic-type-parameters generic-type-parameters)
-                     (assoc-in [::type-builders (clojure.core/or key data)] type-builder)
-                     (assoc-in [::type-builders ::this-type] type-builder))]
+                     (assoc-in [::type-builders (clojure.core/or key data)] type-builder*)
+                     (assoc-in [::type-builders ::this-type] type-builder*))]
     (doseq [interface interfaces]
       (when interface ;; why would interface ever be nil?
         (let [interface (clojure.core/or
                           (type-builders interface)
                           (generic-type-parameters interface)
                           interface)]
-          (.AddInterfaceImplementation type-builder interface))))
-    (emit! context* body)
-    (. type-builder CreateType)
-    context*))
+          (.AddInterfaceImplementation type-builder* interface))))
+    (let [context** (emit! context* body)
+          builders (-> context** ::type-builders vals)]
+      (when-not nested?
+        (complete-type type-builder* builders))
+      context**)))
 
 (defmethod emit* ::field
   [{:keys [::type-builder ::type-builders ::generic-type-parameters ::fields] :as context}
