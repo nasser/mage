@@ -86,10 +86,10 @@
 
 (defmethod emit* ::type
   [{:keys [::type-builder ::module-builder ::type-builders ::generic-type-parameters] :as context
-    :or {::type-builders {}
-         ::generic-type-parameters {}}}
+    :or {type-builders {}
+         generic-type-parameters {}}}
    {:keys [::type ::attributes ::interfaces ::super ::generic-parameters ::body ::key] :as data
-    :or {::attributes TypeAttributes/Public}}]
+    :or {attributes TypeAttributes/Public}}]
   (let [module-builder (clojure.core/or
                          module-builder
                          (-> (clojure.core/or
@@ -265,13 +265,13 @@
 (defmethod emit* ::opcode
   [{:keys [::assembly-builders ::module-builders ::type-builders ::method-builders
            ::labels ::locals ::fields ::ilg ::type-builder]
-    :or {::labels {}
-         ::fields {}
-         ::locals {}
-         ::assembly-builders {}
-         ::module-builders {}
-         ::type-builders {}
-         ::method-builders {}}
+    :or {labels {}
+         fields {}
+         locals {}
+         assembly-builders {}
+         module-builders {}
+         type-builders {}
+         method-builders {}}
     :as context}
    {:keys [::opcode ::argument] :as data}]
   (cond
