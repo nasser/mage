@@ -99,7 +99,7 @@
                                (compiler-context)
                                (eval-context))
                              .ModuleBuilder))
-        nested? (boolean type-builder)
+        nested? false
         type-builder* (if nested?
                         ;; TODO fix attributes hack
                         (if super
