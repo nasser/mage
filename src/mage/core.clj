@@ -50,7 +50,7 @@
                      (assoc ::assembly-builder assembly-builder)
                      (assoc-in [::assembly-builders data] assembly-builder)
                      (emit! body))]
-    (if (or (= access AssemblyBuilderAccess/Save)
+    (if (clojure.core/or (= access AssemblyBuilderAccess/Save)
             (= access AssemblyBuilderAccess/RunAndSave))
       (.Save assembly-builder
              (str (.. assembly-builder GetName Name) ".dll")))
