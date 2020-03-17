@@ -139,7 +139,8 @@
           builders (-> context** ::type-builders vals)]
       (when-not nested?
         (complete-type type-builder* builders))
-      context**)))
+      (assoc context**
+             ::ilg ilg))))
 
 (defmethod emit* ::field
   [{:keys [::type-builder ::type-builders ::generic-type-parameters ::fields] :as context}
