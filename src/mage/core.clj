@@ -498,7 +498,9 @@
 (defn constructor
   ([parameter-types body] (constructor CallingConventions/Standard parameter-types body))
   ([calling-convention parameter-types body]
-   (constructor (gensym "constructor") MethodAttributes/Public calling-convention parameter-types body))
+   (constructor MethodAttributes/Public calling-convention parameter-types body))
+  ([attributes calling-convention parameter-types body]
+   (constructor (gensym "constructor") attributes calling-convention parameter-types body))
   ([key attributes calling-convention parameter-types body]
    {::constructor key
     ::attributes attributes
