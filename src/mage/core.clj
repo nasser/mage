@@ -498,12 +498,12 @@
 (defn constructor
   ([parameter-types body] (constructor CallingConventions/Standard parameter-types body))
   ([calling-convention parameter-types body]
-   (constructor MethodAttributes/Public calling-convention parameter-types body))
-  ([attributes calling-convention parameter-types body]
-   {::constructor parameter-types
+   (constructor (gensym "constructor") MethodAttributes/Public calling-convention parameter-types body))
+  ([key attributes calling-convention parameter-types body]
+   {::constructor key
     ::attributes attributes
     ::calling-convention calling-convention
-    ::parameter-types parameter-types ;; TODO duplicate?
+    ::parameter-types parameter-types
     ::body body}))
 
 (defn local
