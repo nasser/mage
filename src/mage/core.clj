@@ -50,8 +50,9 @@
                      (assoc ::assembly-builder assembly-builder)
                      (assoc-in [::assembly-builders data] assembly-builder)
                      (emit! body))]
-    (if (clojure.core/or (= access AssemblyBuilderAccess/Save)
-            (= access AssemblyBuilderAccess/RunAndSave))
+    (if (clojure.core/or
+          (= access AssemblyBuilderAccess/Save)
+          (= access AssemblyBuilderAccess/RunAndSave))
       (.Save assembly-builder
              (str (.. assembly-builder GetName Name) ".dll")))
     context*))
@@ -98,7 +99,7 @@
                                (compiler-context)
                                (eval-context))
                              .ModuleBuilder))
-        nested? (boolean type-builder)
+        nested? false
         type-builder* (if nested?
                         ;; TODO fix attributes hack
                         (if super
