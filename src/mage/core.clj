@@ -125,7 +125,6 @@
         context* (-> context
                      (assoc
                        ::type-builder type-builder*
-                       ::fields {} ;; TODO clearing fields for new types - bad idea?
                        ::generic-type-parameters generic-type-parameters)
                      (assoc-in [::type-builders data] type-builder*)
                      (assoc-in [::type-builders ::this-type] type-builder*))]
@@ -145,13 +144,18 @@
                           [::method-builders ::type-builders ::fields])))))
 
 (defmethod emit* ::field
-  [{:keys [::type-builder ::type-builders ::generic-type-parameters ::fields] :as context}
+  [{:keys [::type-builder ::type-builders ::generic-type-parameters ::fields]
+    :as context
+    :or {fields {}
+         type-builders {}}}
    {:keys [::field ::type ::attributes] :as data}]
-  (let [t (clojure.core/or (type-builders type)
-                           (generic-type-parameters type)
-                           type)
-        ^FieldBuilder field (.DefineField type-builder (str field) t attributes)]
-    (assoc-in context [::fields data] field)))
+  (if (fields data)
+    context
+    (let [t (clojure.core/or (type-builders type)
+                             (generic-type-parameters type)
+                             type)
+          ^FieldBuilder field (.DefineField type-builder (str field) t attributes)]
+      (assoc-in context [::fields data] field))))
 
 
 (defmethod emit* ::method
