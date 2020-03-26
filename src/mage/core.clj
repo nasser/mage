@@ -184,7 +184,9 @@
       (let [{:keys [::attributes ::name]} (nth parameters i)
             j (inc i)]
         (.DefineParameter method-builder j attributes name)))
-    (emit! context* body)))
+    (merge context
+           (select-keys (emit! context* body)
+                        [::method-builders ::type-builders ::fields]))))
 
 (defmethod emit* ::constructor
   [{:keys [::type-builder ::fields ::generic-type-parameters] :as context}
