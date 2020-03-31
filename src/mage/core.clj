@@ -424,7 +424,7 @@
 
 (defn type
   ([name]
-   (type name nil))
+   (type name []))
   ([name body]
    (type name [] body))
   ([name interfaces body]
