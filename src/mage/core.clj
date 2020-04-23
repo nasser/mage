@@ -94,11 +94,11 @@
    {:keys [::type ::attributes ::interfaces ::super ::generic-parameters ::body] :as data
     :or {attributes TypeAttributes/Public}}]
   (let [module-builder (clojure.core/or
-                         module-builder
-                         (-> (clojure.core/or
-                               (compiler-context)
-                               (eval-context))
-                             .ModuleBuilder))
+                        module-builder
+                        (-> (clojure.core/or
+                             (compiler-context)
+                             (eval-context))
+                            .ModuleBuilder))
         nested? false
         type-builder* (if nested?
                         ;; TODO fix attributes hack
@@ -115,17 +115,17 @@
         generic-parameter-builders
         (when generic-parameters
           (.DefineGenericParameters
-            type-builder*
-            (into-array String (map str generic-parameters))))
+           type-builder*
+           (into-array String (map str generic-parameters))))
         generic-type-parameters
         (apply hash-map
                (interleave
-                 generic-parameters
-                 generic-parameter-builders))
+                generic-parameters
+                generic-parameter-builders))
         context* (-> context
                      (assoc
-                       ::type-builder type-builder*
-                       ::generic-type-parameters generic-type-parameters)
+                      ::type-builder type-builder*
+                      ::generic-type-parameters generic-type-parameters)
                      (assoc-in [::type-builders data] type-builder*)
                      (assoc-in [::type-builders ::this-type] type-builder*))]
     (doseq [interface interfaces]
@@ -147,6 +147,7 @@
   [{:keys [::type-builder ::type-builders ::generic-type-parameters ::fields]
     :as context
     :or {fields {}
+         generic-type-parameters {}
          type-builders {}}}
    {:keys [::field ::type ::attributes] :as data}]
   (if (fields data)
@@ -159,51 +160,61 @@
 
 
 (defmethod emit* ::method
-  [{:keys [::type-builder ::type-builders ::fields ::generic-type-parameters] :as context}
-   {:keys [::method ::attributes ::return-type ::parameters ::body] :as data}]
+  [{:keys [::type-builder ::type-builders ::method-builders ::generic-type-parameters] 
+    :as context
+    :or {generic-type-parameters {}
+         type-builders {}}}
+   {:keys [::method ::attributes ::return-type ::parameters ::override ::body] :as data}]
   (let [method-builder (. type-builder (DefineMethod
-                                 method
-                                 attributes
-                                 (clojure.core/or
-                                   (type-builders return-type)
-                                   (generic-type-parameters return-type)
-                                   return-type)
-                                 (->> parameters
-                                      (map ::type)
-                                      (map #(clojure.core/or (generic-type-parameters %) %))
-                                      (into-array Type))))
+                                        method
+                                        attributes
+                                        (clojure.core/or
+                                         (type-builders return-type)
+                                         (generic-type-parameters return-type)
+                                         return-type)
+                                        (->> parameters
+                                             (map ::parameter)
+                                             (map #(clojure.core/or (type-builders %) (generic-type-parameters %) %))
+                                             (into-array Type))))
         context* (-> context
                      (assoc
-                       ::ilg (. method-builder GetILGenerator)
-                       ::method-builder method-builder
-                       ::labels {}
-                       ::locals {})
+                      ::ilg (. method-builder GetILGenerator)
+                      ::method-builder method-builder
+                      ::labels {}
+                      ::locals {})
                      (assoc-in [::method-builders data] method-builder)
                      (assoc-in [::method-builders ::this-method] method-builder))]
     (doseq [i (range (count parameters))]
       (let [{:keys [::attributes ::name]} (nth parameters i)
             j (inc i)]
         (.DefineParameter method-builder j attributes name)))
+    (when override
+      (let [override (clojure.core/or
+                      (method-builders override)
+                      override)]
+        (.DefineMethodOverride type-builder method-builder override)))
     (merge context
            (select-keys (emit! context* body)
                         [::method-builders ::type-builders ::fields]))))
 
 (defmethod emit* ::constructor
-  [{:keys [::type-builder ::fields ::generic-type-parameters] :as context}
+  [{:keys [::type-builder ::generic-type-parameters] 
+    :or {generic-type-parameters {}}
+    :as context}
    {:keys [::name ::attributes ::calling-convention ::return-type ::parameter-types ::body] :as data}]
   (let [constructor-builder
         (. type-builder (DefineConstructor
-                  attributes
-                  calling-convention
-                  (into-array Type
-                              (map #(clojure.core/or (generic-type-parameters %) %)
-                                   parameter-types))))
+                         attributes
+                         calling-convention
+                         (into-array Type
+                                     (map #(clojure.core/or (generic-type-parameters %) %)
+                                          parameter-types))))
         context* (-> context
                      (assoc
-                       ::ilg (. constructor-builder GetILGenerator)
-                       ::method-builder constructor-builder
-                       ::labels {}
-                       ::locals {})
+                      ::ilg (. constructor-builder GetILGenerator)
+                      ::method-builder constructor-builder
+                      ::labels {}
+                      ::locals {})
                      (assoc-in [::method-builders data] constructor-builder)
                      (assoc-in [::method-builders ::this-method] constructor-builder))]
     (emit! context* body)))
@@ -239,7 +250,7 @@
     (assoc-in context [::method-builders data] method-builder)))
 
 (defmethod emit* ::local
-  [{:keys [::ilg ::type-builders] :as context} {:keys [::type ::local] :as data}]
+  [{:keys [::ilg ::type-builders] :as context :or {type-builders {}}} {:keys [::type ::local] :as data}]
   (let [t (clojure.core/or (type-builders type) type)
         ^LocalBuilder local-builder (.DeclareLocal ilg t)]
     (if-let [n local] (.SetLocalSymInfo local-builder (str n)))
@@ -447,7 +458,7 @@
   ([type name]
    (parameter type name ParameterAttributes/None))
   ([type name attributes]
-   {::type type
+   {::parameter type
     ::name name
     ::attributes attributes}))
 
@@ -455,10 +466,13 @@
   ([name return-type parameters body]
    (method name MethodAttributes/Public return-type parameters body))
   ([name attributes return-type parameters body]
+   (method name attributes return-type parameters nil body))
+  ([name attributes return-type parameters override body]
    {::method name
     ::attributes attributes
     ::return-type return-type
-    ::parameters (mapv #(if (instance? Type %) (parameter %) %) parameters)
+    ::parameters (mapv #(if-not (::parameter %) (parameter %) %) parameters)
+    ::override override
     ::body body}))
 
 ;; try block
