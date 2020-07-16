@@ -257,7 +257,9 @@
     (assoc-in context [::locals data] local-builder)))
 
 (defmethod emit* ::label
-  [{:keys [::ilg ::labels] :as context} data]
+  [{:keys [::ilg ::labels]
+    :as context
+    :or {labels {}}} data]
   (let [^Label label (clojure.core/or (labels data)
                          (.DefineLabel ilg))]
     (.MarkLabel ilg label)
