@@ -59,25 +59,15 @@
 
 (defmethod emit* ::module
   [{:keys [::assembly-builder] :as context} {:keys [::module ::body] :as data}]
-  (let [module-builder (. (clojure.core/or
-                            assembly-builder
-                            (.AssemblyBuilder clojure.lang.Compiler/EvalContext))
+  (when-not assembly-builder
+    (throw (ex-info "assembly-builder cannot be nil when emitting a module" {:context context :data data})))
+  (let [module-builder (. assembly-builder
                           (DefineDynamicModule (str module)))
         context* (-> context
                      (assoc ::module-builder module-builder)
                      (assoc-in [::module-builders data] module-builder))]
     (emit! context* body)))
 
-
-(defn compiler-context []
-  (let [field (.GetField clojure.lang.Compiler
-                         "CompilerContextVar"
-                         (enum-or BindingFlags/NonPublic
-                                  BindingFlags/Static))]
-    (-> field (.GetValue nil) deref)))
-
-(defn eval-context []
-  clojure.lang.Compiler/EvalContext)
 
 (defn complete-type [builder builders]
   (. builder CreateType)
@@ -93,13 +83,9 @@
          generic-type-parameters {}}}
    {:keys [::type ::attributes ::interfaces ::super ::generic-parameters ::body] :as data
     :or {attributes TypeAttributes/Public}}]
-  (let [module-builder (clojure.core/or
-                        module-builder
-                        (-> (clojure.core/or
-                             (compiler-context)
-                             (eval-context))
-                            .ModuleBuilder))
-        nested? false
+  (when-not module-builder
+    (throw (ex-info "module-builder cannot be nil when emitting a type" {:context context :data data})))
+  (let [nested? false
         type-builder* (if nested?
                         ;; TODO fix attributes hack
                         (if super
