@@ -50,11 +50,6 @@
                      (assoc ::assembly-builder assembly-builder)
                      (assoc-in [::assembly-builders data] assembly-builder)
                      (emit! body))]
-    (if (clojure.core/or
-          (= access AssemblyBuilderAccess/Save)
-          (= access AssemblyBuilderAccess/RunAndSave))
-      (.Save assembly-builder
-             (str (.. assembly-builder GetName Name) ".dll")))
     context*))
 
 (defmethod emit* ::module
@@ -399,7 +394,7 @@
   ([name]
    (assembly name nil))
   ([name body]
-   (assembly name AssemblyBuilderAccess/RunAndSave body))
+   (assembly name AssemblyBuilderAccess/Run body))
   ([name access body]
    {::assembly name
     ::access access
@@ -413,7 +408,7 @@
     ::body body}))
 
 (defn assembly+module
-  ([name body] (assembly+module name AssemblyBuilderAccess/RunAndSave body))
+  ([name body] (assembly+module name AssemblyBuilderAccess/Run body))
   ([name access body]
    (assembly
      name access
