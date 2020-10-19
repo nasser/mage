@@ -234,7 +234,6 @@
   [{:keys [::ilg ::type-builders] :as context :or {type-builders {}}} {:keys [::type ::local] :as data}]
   (let [t (clojure.core/or (type-builders type) type)
         ^LocalBuilder local-builder (.DeclareLocal ilg t)]
-    (if-let [n local] (.SetLocalSymInfo local-builder (str n)))
     (assoc-in context [::locals data] local-builder)))
 
 (defmethod emit* ::label
