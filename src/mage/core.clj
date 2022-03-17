@@ -1,7 +1,7 @@
 (ns mage.core
   (:refer-clojure :exclude [pop rem and or not type catch finally])
   (:require [clojure.string :as string])
-  (:import [System.Reflection.Emit LocalBuilder Label ILGenerator OpCodes AssemblyBuilderAccess TypeBuilder MethodBuilder FieldBuilder DynamicMethod]
+  (:import [System.Reflection.Emit LocalBuilder Label ILGenerator OpCodes AssemblyBuilderAccess TypeBuilder MethodBuilder FieldBuilder CustomAttributeBuilder]
            [System.Reflection ParameterAttributes CallingConventions BindingFlags AssemblyName TypeAttributes MethodAttributes MethodImplAttributes FieldAttributes]
            [System.Runtime.InteropServices CallingConvention CharSet]))
 
@@ -37,6 +37,11 @@
      (some? stream)
      (emit* initial-ctx stream))))
 
+;; TODO support named properties/fields
+(defn parse-custom-attribute [[type args]]
+  (let [ctor (.GetConstructor type (if args (into-array Type (map clojure.core/type args)) Type/EmptyTypes))
+        arg-array (into-array Object args)]
+    (CustomAttributeBuilder. ctor arg-array)))
 
 ;; TODO should we use a generic 'references' map instead of
 ;; specific maps e.g. assembly-builders, fields, locals, etc?
@@ -76,7 +81,7 @@
   [{:keys [::type-builder ::method-builder ::module-builder ::ilg ::type-builders ::generic-type-parameters] :as context
     :or {type-builders {}
          generic-type-parameters {}}}
-   {:keys [::type ::attributes ::interfaces ::super ::generic-parameters ::body] :as data
+   {:keys [::type ::attributes ::interfaces ::super ::generic-parameters ::body ::custom-attributes] :as data
     :or {attributes TypeAttributes/Public}}]
   (when-not module-builder
     (throw (ex-info "module-builder cannot be nil when emitting a type" {:context context :data data})))
@@ -116,6 +121,8 @@
                           (generic-type-parameters interface)
                           interface)]
           (.AddInterfaceImplementation type-builder* interface))))
+    (doseq [ca custom-attributes]
+      (.SetCustomAttribute type-builder* (parse-custom-attribute ca)))
     (let [context** (emit! context* body)
           builders (-> context** ::type-builders vals)]
       (when-not nested?
@@ -130,13 +137,15 @@
     :or {fields {}
          generic-type-parameters {}
          type-builders {}}}
-   {:keys [::field ::type ::attributes] :as data}]
+   {:keys [::field ::type ::attributes ::custom-attributes] :as data}]
   (if (fields data)
     context
     (let [t (clojure.core/or (type-builders type)
                              (generic-type-parameters type)
                              type)
           ^FieldBuilder field (.DefineField type-builder (str field) t attributes)]
+      (doseq [ca custom-attributes]
+        (.SetCustomAttribute field (parse-custom-attribute ca)))
       (assoc-in context [::fields data] field))))
 
 
@@ -145,7 +154,7 @@
     :as context
     :or {generic-type-parameters {}
          type-builders {}}}
-   {:keys [::method ::attributes ::return-type ::parameters ::override ::body] :as data}]
+   {:keys [::method ::attributes ::return-type ::parameters ::override ::body ::custom-attributes] :as data}]
   (let [method-builder (. type-builder (DefineMethod
                                         method
                                         attributes
@@ -174,6 +183,8 @@
                       (method-builders override)
                       override)]
         (.DefineMethodOverride type-builder method-builder override)))
+    (doseq [ca custom-attributes]
+      (.SetCustomAttribute method-builder (parse-custom-attribute ca)))
     (merge context
            (select-keys (emit! context* body)
                         [::method-builders ::type-builders ::fields]))))
@@ -426,13 +437,14 @@
    (type name attributes interfaces System.Object body))
   ([name attributes interfaces super body]
    (type name attributes interfaces super nil body))
-  ([name attributes interfaces super generic-parameters body]
+  ([name attributes interfaces super generic-parameters body custom-attributes]
    {::type name 
     ::attributes attributes 
     ::interfaces interfaces 
     ::super super 
     ::generic-parameters generic-parameters
-    ::body body}))
+    ::body body
+    ::custom-attributes custom-attributes}))
 
 (defn parameter
   ([type]
@@ -450,12 +462,15 @@
   ([name attributes return-type parameters body]
    (method name attributes return-type parameters nil body))
   ([name attributes return-type parameters override body]
+   (method name attributes return-type parameters nil body []))
+  ([name attributes return-type parameters override body custom-attributes]
    {::method name
     ::attributes attributes
     ::return-type return-type
     ::parameters (mapv #(if-not (::parameter %) (parameter %) %) parameters)
     ::override override
-    ::body body}))
+    ::body body
+    ::custom-attributes custom-attributes}))
 
 ;; try block
 (defn exception
@@ -518,7 +533,8 @@
   ([] (field System.Object))
   ([t] (field t (gensym "field")))
   ([t i] (field t i (enum-or FieldAttributes/InitOnly FieldAttributes/Private)))
-  ([t i attr] {::field i ::type t ::attributes attr}))
+  ([t i attr] {::field i ::type t ::attributes attr})
+  ([t i attr custom-attr] {::field i ::type t ::attributes attr ::custom-attributes custom-attr}))
 
 (defn label
   ([] (label (gensym "label")))
