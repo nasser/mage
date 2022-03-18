@@ -462,7 +462,7 @@
   ([name attributes return-type parameters body]
    (method name attributes return-type parameters nil body))
   ([name attributes return-type parameters override body]
-   (method name attributes return-type parameters nil body []))
+   (method name attributes return-type parameters override body []))
   ([name attributes return-type parameters override body custom-attributes]
    {::method name
     ::attributes attributes
