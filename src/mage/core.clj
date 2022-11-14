@@ -1,7 +1,7 @@
 (ns mage.core
   (:refer-clojure :exclude [pop rem and or not type catch finally])
   (:require [clojure.string :as string])
-  (:import [System.Reflection.Emit LocalBuilder Label ILGenerator OpCodes AssemblyBuilderAccess TypeBuilder MethodBuilder FieldBuilder CustomAttributeBuilder]
+  (:import [System.Reflection.Emit LocalBuilder Label ILGenerator OpCodes AssemblyBuilderAccess TypeBuilder MethodBuilder ConstructorBuilder FieldBuilder CustomAttributeBuilder]
            [System.Reflection ParameterAttributes CallingConventions BindingFlags AssemblyName TypeAttributes MethodAttributes MethodImplAttributes FieldAttributes]
            [System.Runtime.InteropServices CallingConvention CharSet]))
 
@@ -155,17 +155,18 @@
     :or {generic-type-parameters {}
          type-builders {}}}
    {:keys [::method ::attributes ::return-type ::parameters ::override ::body ::custom-attributes] :as data}]
-  (let [method-builder (. type-builder (DefineMethod
-                                        method
-                                        attributes
-                                        (clojure.core/or
-                                         (type-builders return-type)
-                                         (generic-type-parameters return-type)
-                                         return-type)
-                                        (->> parameters
-                                             (map ::parameter)
-                                             (map #(clojure.core/or (type-builders %) (generic-type-parameters %) %))
-                                             (into-array Type))))
+  (let [^MethodBuilder method-builder 
+        (. type-builder (DefineMethod
+                         method
+                         attributes
+                         (clojure.core/or
+                          (type-builders return-type)
+                          (generic-type-parameters return-type)
+                          return-type)
+                         (->> parameters
+                              (map ::parameter)
+                              (map #(clojure.core/or (type-builders %) (generic-type-parameters %) %))
+                              (into-array Type))))
         context* (-> context
                      (assoc
                       ::ilg (. method-builder GetILGenerator)
@@ -194,7 +195,7 @@
     :or {generic-type-parameters {}}
     :as context}
    {:keys [::name ::attributes ::calling-convention ::return-type ::parameter-types ::body] :as data}]
-  (let [constructor-builder
+  (let [^ConstructorBuilder constructor-builder
         (. type-builder (DefineConstructor
                          attributes
                          calling-convention
